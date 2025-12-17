@@ -1,169 +1,227 @@
 """
-This module takes care of starting the API Server, Loading the DB and Adding the endpoints
+Rutas de la API con JWT y hash de contraseñas
 """
-from flask import Flask, request, jsonify, url_for, Blueprint
-from api.models import db, User
-from api.utils import generate_sitemap, APIException
+from flask import request, jsonify, Blueprint
+from api.models import db, User, Product, CartItem
 from flask_cors import CORS
 
-api = Blueprint('api', __name__)
+# Seguridad
+from werkzeug.security import generate_password_hash, check_password_hash
+from flask_jwt_extended import (
+    create_access_token,
+    jwt_required,
+    get_jwt_identity
+)
 
-# Allow CORS requests to this API
+api = Blueprint('api', __name__)
 CORS(api)
 
+# ======================================
+# RUTA DE PRUEBA
+# ======================================
+@api.route('/hello', methods=['GET'])
+def hello():
+    return jsonify({"message": "API funcionando correctamente"}), 200
 
-@api.route('/hello', methods=['POST', 'GET'])
-def handle_hello():
 
-    response_body = {
-        "message": "Hello! I'm a message that came from the backend, check the network tab on the google inspector and you will see the GET request"
-    }
+# ======================================
+# USUARIOS
+# ======================================
 
-    return jsonify(response_body), 200
-
+# Crear usuario (registro)
 @api.route('/users', methods=['POST'])
 def create_user():
     data = request.get_json()
+
     if not data.get("email") or not data.get("password"):
         return jsonify({"error": "Email y password son requeridos"}), 400
 
-    # Crear usuario
+    # Hashear contraseña
+    hashed_password = generate_password_hash(data["password"])
+
     new_user = User(
         email=data["email"],
-        password=data["password"],  # encriptar
+        password=hashed_password,
         is_active=True
     )
+
     db.session.add(new_user)
     db.session.commit()
 
     return jsonify(new_user.serialize()), 201
 
+
+# Login → devuelve JWT
+@api.route('/login', methods=['POST'])
+def login():
+    data = request.get_json()
+
+    if not data.get("email") or not data.get("password"):
+        return jsonify({"error": "Email y password son requeridos"}), 400
+
+    user = User.query.filter_by(email=data["email"]).first()
+
+    if not user or not check_password_hash(user.password, data["password"]):
+        return jsonify({"error": "Credenciales inválidas"}), 401
+
+    # 🔑 IMPORTANTE: identity DEBE SER STRING
+    token = create_access_token(identity=str(user.id))
+
+    return jsonify({"access_token": token}), 200
+
+
+# Listar usuarios (sin protección por ahora)
 @api.route('/users', methods=['GET'])
 def list_users():
     users = User.query.all()
-    return jsonify([user.serialize() for user in users]), 200
+    return jsonify([u.serialize() for u in users]), 200
 
-# Crear Producto
+
+# Actualizar usuario (solo el dueño)
+@api.route('/users/<int:id>', methods=['PUT'])
+@jwt_required()
+def update_user(id):
+    current_user_id = int(get_jwt_identity())  # 🔧 convertir a int
+
+    if current_user_id != id:
+        return jsonify({"error": "No puedes modificar otro usuario"}), 403
+
+    user = User.query.get(id)
+    if not user:
+        return jsonify({"error": "Usuario no encontrado"}), 404
+
+    data = request.get_json()
+
+    user.email = data.get("email", user.email)
+
+    if data.get("password"):
+        user.password = generate_password_hash(data["password"])
+
+    user.is_active = data.get("is_active", user.is_active)
+
+    db.session.commit()
+    return jsonify(user.serialize()), 200
+
+
+# Borrar usuario (solo el dueño)
+@api.route('/users/<int:id>', methods=['DELETE'])
+@jwt_required()
+def delete_user(id):
+    current_user_id = int(get_jwt_identity())  # 🔧 convertir a int
+
+    if current_user_id != id:
+        return jsonify({"error": "No puedes borrar otro usuario"}), 403
+
+    user = User.query.get(id)
+    if not user:
+        return jsonify({"error": "Usuario no encontrado"}), 404
+
+    db.session.delete(user)
+    db.session.commit()
+
+    return jsonify({"message": "Usuario eliminado"}), 200
+
+
+# ======================================
+# PRODUCTOS
+# ======================================
 
 @api.route('/products', methods=['POST'])
 def create_product():
-    data = request.get_json()  # Obtenemos los datos enviados desde el frontend
-    if not data.get('title') or not data.get('price_cents'):
-        return jsonify({"error": "title and price_cents are required"}), 400
+    data = request.get_json()
+
+    if not data.get("title") or not data.get("price_cents"):
+        return jsonify({"error": "title y price_cents son requeridos"}), 400
 
     product = Product(
-        title=data['title'],
-        description=data.get('description', ''),
-        price_cents=data['price_cents'],
-        image_url=data.get('image_url', '')
+        title=data["title"],
+        description=data.get("description", ""),
+        price_cents=data["price_cents"],
+        image_url=data.get("image_url", "")
     )
+
     db.session.add(product)
     db.session.commit()
+
     return jsonify(product.serialize()), 201
 
-# Listar todos los productos
 
 @api.route('/products', methods=['GET'])
 def get_products():
-    products = Product.query.all()  # Trae todos los productos
-    return jsonify([p.serialize() for p in products])
+    products = Product.query.all()
+    return jsonify([p.serialize() for p in products]), 200
 
-# Obtener un producto po ID
 
-@api.route('/products/<int:id>', methods=['GET'])
-def get_product(id):
-    product = Product.query.get(id)
-    if not product:
-        return jsonify({"error": "Product not found"}), 404
-    return jsonify(product.serialize())
+# ======================================
+# CARRITO
+# ======================================
 
-# Actualizar un producto
-
-@api.route('/products/<int:id>', methods=['PUT'])
-def update_product(id):
-    product = Product.query.get(id)
-    if not product:
-        return jsonify({"error": "Product not found"}), 404
-
-    data = request.get_json()
-    product.title = data.get('title', product.title)
-    product.description = data.get('description', product.description)
-    product.price_cents = data.get('price_cents', product.price_cents)
-    product.image_url = data.get('image_url', product.image_url)
-
-    db.session.commit()
-    return jsonify(product.serialize())
-
-# Borrar un producto
-
-@api.route('/products/<int:id>', methods=['DELETE'])
-def delete_product(id):
-    product = Product.query.get(id)
-    if not product:
-        return jsonify({"error": "Product not found"}), 404
-
-    db.session.delete(product)
-    db.session.commit()
-    return jsonify({"message": "Product deleted"})
-
-# Crea un cardtItem
-
+# Añadir item al carrito
 @api.route('/cart-items', methods=['POST'])
+@jwt_required()
 def add_cart_item():
     data = request.get_json()
-    if not data.get('user_id') or not data.get('product_id'):
-        return jsonify({"error": "user_id and product_id are required"}), 400
+    current_user_id = int(get_jwt_identity())
+
+    if not data.get("product_id"):
+        return jsonify({"error": "product_id requerido"}), 400
 
     cart_item = CartItem(
-        user_id=data['user_id'],
-        product_id=data['product_id'],
-        quantity=data.get('quantity', 1)
+        user_id=current_user_id,
+        product_id=data["product_id"],
+        quantity=data.get("quantity", 1)
     )
+
     db.session.add(cart_item)
     db.session.commit()
+
     return jsonify(cart_item.serialize()), 201
 
-# Lista todos los CartItems
 
+# Ver carrito del usuario logueado
 @api.route('/cart-items', methods=['GET'])
+@jwt_required()
 def get_cart_items():
-    items = CartItem.query.all()
-    return jsonify([item.serialize() for item in items])
+    current_user_id = int(get_jwt_identity())
 
-# Actualiza la cantidad en el carrito
+    items = CartItem.query.filter_by(user_id=current_user_id).all()
+    return jsonify([i.serialize() for i in items]), 200
 
+
+# Actualizar cantidad
 @api.route('/cart-items/<int:id>', methods=['PUT'])
+@jwt_required()
 def update_cart_item(id):
+    current_user_id = int(get_jwt_identity())
+
     item = CartItem.query.get(id)
     if not item:
-        return jsonify({"error": "CartItem not found"}), 404
+        return jsonify({"error": "Item no encontrado"}), 404
+
+    if item.user_id != current_user_id:
+        return jsonify({"error": "No autorizado"}), 403
 
     data = request.get_json()
-    item.quantity = data.get('quantity', item.quantity)
+    item.quantity = data.get("quantity", item.quantity)
+
     db.session.commit()
-    return jsonify(item.serialize())
+    return jsonify(item.serialize()), 200
 
-# Borra un item del carrito
 
+# Borrar item
 @api.route('/cart-items/<int:id>', methods=['DELETE'])
+@jwt_required()
 def delete_cart_item(id):
+    current_user_id = int(get_jwt_identity())
+
     item = CartItem.query.get(id)
     if not item:
-        return jsonify({"error": "CartItem not found"}), 404
+        return jsonify({"error": "Item no encontrado"}), 404
+
+    if item.user_id != current_user_id:
+        return jsonify({"error": "No autorizado"}), 403
 
     db.session.delete(item)
     db.session.commit()
-    return jsonify({"message": "CartItem deleted"})
 
-
-
-
-
-
-
-
-
-
-
-
-
+    return jsonify({"message": "Item eliminado"}), 200

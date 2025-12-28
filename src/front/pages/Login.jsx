@@ -1,52 +1,65 @@
 import { useState } from "react";
-import { useAuth } from "../context/AuthContext";
+import { useNavigate } from "react-router-dom";
+import useGlobalReducer from "../hooks/useGlobalReducer";
 
 export default function Login() {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [errorMsg, setErrorMsg] = useState("");
-  const { login } = useAuth();
+  const navigate = useNavigate();
+  const { store, dispatch } = useGlobalReducer();
 
-  const handleSubmit = async (e) => {
+  const [email, setEmail] = useState("usuario1@example.com");
+  const [password, setPassword] = useState("123456");
+  const [error, setError] = useState("");
+
+  const submit = async (e) => {
     e.preventDefault();
-    setErrorMsg("");
+    setError("");
 
     try {
-      const backendUrl = import.meta.env.VITE_BACKEND_URL;
-      if (!backendUrl) {
-        setErrorMsg("Backend URL no definida. Revisa tu .env");
-        return;
-      }
-
-      const response = await fetch(`${backendUrl}/api/login`, {
+      const resp = await fetch(`${store.backendUrl}/api/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),
       });
 
-      if (!response.ok) {
-        const text = await response.text();
-        setErrorMsg(`Login failed: ${response.status} - ${text}`);
-        return;
-      }
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data?.error || "Login incorrecto");
 
-      const data = await response.json();
-      login({ email: data.email });
-      alert("Login exitoso!");
-    } catch (error) {
-      setErrorMsg("Error en la conexión con el backend");
+      dispatch({
+        type: "login_success",
+        payload: { token: data.access_token, user: data.user },
+      });
+
+      // cargar carrito
+      const cart = await fetch(`${store.backendUrl}/api/cart-items`, {
+        headers: { Authorization: `Bearer ${data.access_token}` },
+      }).then(r => r.json());
+      dispatch({ type: "set_cart", payload: cart });
+
+      navigate("/products");
+    } catch (err) {
+      setError(err.message || "Error de login");
     }
   };
 
   return (
-    <div>
-      <h1>Login</h1>
-      <form onSubmit={handleSubmit}>
-        <input type="text" placeholder="Usuario" value={email} onChange={e => setEmail(e.target.value)} required />
-        <input type="password" placeholder="Contraseña" value={password} onChange={e => setPassword(e.target.value)} required />
-        <button type="submit" className="btn btn-primary mt-2">Ingresar</button>
+    <div className="container" style={{ maxWidth: 480 }}>
+      <h2 className="mb-3">Login</h2>
+
+      {error && <div className="alert alert-danger">{error}</div>}
+
+      <form onSubmit={submit} className="card p-3">
+        <div className="mb-3">
+          <label className="form-label">Email</label>
+          <input className="form-control" value={email} onChange={(e) => setEmail(e.target.value)} required />
+        </div>
+
+        <div className="mb-3">
+          <label className="form-label">Contraseña</label>
+          <input className="form-control" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+        </div>
+
+        <button className="btn btn-primary" type="submit">Entrar</button>
       </form>
-      {errorMsg && <p style={{ color: "red" }}>{errorMsg}</p>}
     </div>
   );
 }

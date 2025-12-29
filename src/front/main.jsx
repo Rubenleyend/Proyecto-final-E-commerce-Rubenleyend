@@ -8,7 +8,10 @@ import { BackendURL } from "./components/BackendURL";
 import "bootstrap/dist/css/bootstrap.min.css";
 
 const Main = () => {
-  if (!import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_BACKEND_URL === "") {
+  if (
+    import.meta.env.DEV &&
+    (!import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_BACKEND_URL === "")
+  ) {
     return (
       <React.StrictMode>
         <BackendURL />
